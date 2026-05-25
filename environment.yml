@@ -1,0 +1,84 @@
+name: pid
+channels:
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.10
+  - pip
+  # CUDA toolchain for compiling flash-attn (cuda-toolkit already bundles
+  # cuda-nvcc, but listed explicitly so it's obvious nvcc is on PATH).
+  - cuda-toolkit=12.9
+  - cuda-nvcc=12.9
+  - just
+  # Host compiler (gcc/g++) is taken from the system — required: gcc >= 11.
+  # We do NOT install gcc/gxx from conda because the linux-aarch64
+  # conda-forge gxx packages currently ship a buggy deactivate script
+  # (CONDA_BACKUP_CXX unbound, breaks post-link on env create).
+  - pip:
+      # ---- PyTorch (cu129 wheels, aligned with the conda cuda-toolkit=12.9 above).
+      #      --extra-index-url (not --index-url) so that non-torch packages below
+      #      still resolve from PyPI. Versions pinned because they must match the
+      #      wheel index. ----
+      - --extra-index-url=https://download.pytorch.org/whl/cu129
+      - torch==2.8.0
+      - torchvision==0.23.0
+
+      # ---- HuggingFace stack (pipelines used: Flux, Flux2, SD3, Z-Image, QwenImage).
+      #      diffusers needs >=0.37 for Flux2/Z-Image/QwenImage support.
+      #      transformers is pinned to 4.57.1 because the Scale-RAE Qwen LM
+      #      (used by from_ldm_siglip via the upstream Scale-RAE repo) is tightly
+      #      coupled to the 4.x API — on transformers 5.x the LM silently emits
+      #      degenerate image embeddings (16×16 tile pattern) without raising.
+      #      Bump only after re-testing from_ldm_siglip end-to-end. ----
+      - diffusers>=0.37.0
+      - transformers==4.57.1
+      # Do NOT pin huggingface-hub here. transformers 4.57.1 caps it at <1.0,
+      # so a `huggingface-hub>=1.0` pin will hard-conflict and abort
+      # `conda env create`. The version transformers pulls in (0.36.x) already
+      # ships the `hf` CLI used by the checkpoint-download instructions —
+      # `huggingface-cli` was only deprecated, not removed, until 1.0.
+      - safetensors
+      # sentencepiece is required for the T5 tokenizer that ships with the
+      # flux/flux2/sd3/zimage diffusers pipelines (tokenizer_2). Without it,
+      # FluxPipeline.from_pretrained fails with
+      # "Cannot instantiate this tokenizer from a slow version". transformers
+      # does NOT pull it as a runtime dep — it has to be listed explicitly.
+      - sentencepiece
+
+      # ---- Imaging / IO (only stable basic APIs used: Image, imwrite, rearrange).
+      #      numpy stays pinned to 1.26 — do NOT upgrade to 2.x, it breaks dtype
+      #      promotion and removes np.int / np.float which downstream libs rely on.
+      #      pandas is mandatory: easy_io.handlers.registry_utils hard-imports
+      #      PandasHandler at module load. ----
+      - numpy==1.26.4
+      - pandas
+      - pillow
+      - imageio
+      - opencv-python-headless
+      - einops
+
+      # ---- Config / experiment plumbing. hydra-core + omegaconf stay pinned —
+      #      this codebase uses deeper APIs (compose, initialize, ConfigStore,
+      #      GlobalHydra, LazyConfig) that have broken across minor versions. ----
+      - hydra-core==1.3.2
+      - omegaconf==2.3.0
+      - pyyaml
+      - attrs
+      - attr
+
+      # ---- Logging / utils ----
+      - loguru
+      - termcolor
+      - fvcore
+      - iopath
+      - pynvml
+      - wandb
+
+      # ---- Build helpers (also used by the flash-attn install step) ----
+      - ninja
+      - packaging
+
+      # ---- Optional: S3 upload of inference outputs (boto3 is imported lazily).
+      #      boto3 and botocore must stay in sync — relax them together. ----
+      - boto3>=1.34
+      - botocore>=1.34

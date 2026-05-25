@@ -1,0 +1,51 @@
+# requirements.txt for PiD custom node package in ComfyUI
+# Usage: python_embedded\python.exe -m pip install -r requirements.txt
+
+# --- Core Diffusion & HuggingFace dependencies ---
+diffusers>=0.37.0
+transformers>=4.57.1
+safetensors
+sentencepiece
+huggingface-hub>=1.0
+
+# --- Imaging / IO / Utils ---
+einops
+pandas
+pillow
+imageio
+opencv-python-headless
+
+# --- Config & Experiment plumbing ---
+hydra-core==1.3.2
+omegaconf==2.3.0
+pyyaml
+attrs
+attr
+
+# --- Logging & Utils ---
+loguru
+termcolor
+fvcore
+iopath
+pynvml
+wandb
+
+# --- Build tools ---
+ninja
+packaging
+
+# --- Cloud/S3 integration (imported lazily by the codebase) ---
+boto3>=1.34
+botocore>=1.34
+
+# --- PyTorch (Pre-installed in ComfyUI python_embedded) ---
+# We do not uncomment these to prevent overriding your ComfyUI PyTorch build,
+# but they are the versions that the repository is tested with:
+# torch==2.8.0
+# torchvision==0.23.0
+
+# --- NumPy (Pre-installed in ComfyUI python_embedded) ---
+# Note: PiD recommends numpy==1.26.4 because NumPy 2.x removes np.int/np.float
+# and breaks dtype promotion in some downstream packages. Uncomment if needed,
+# but be aware it might affect other custom nodes.
+# numpy==1.26.4
