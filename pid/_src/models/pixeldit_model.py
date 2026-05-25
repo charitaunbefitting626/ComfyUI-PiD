@@ -138,11 +138,11 @@ class PixelDiTModel(ImaginaireModel):
         else:
             self.autocast_dtype = None
             self.precision = torch.float32
-        self.tensor_kwargs = {"device": "cuda", "dtype": self.precision}
+        self.tensor_kwargs = {"device": "cpu", "dtype": self.precision}
 
         with misc.timer("PixelDiTModel: build_net"):
             self.net = lazy_instantiate(config.net)
-            self.net = self.net.to(device="cuda", dtype=torch.float32)
+            self.net = self.net.to(device="cpu", dtype=torch.float32)
             self.net.requires_grad_(True)
             if hasattr(self.net, "init_weights"):
                 self.net.init_weights()
@@ -151,7 +151,7 @@ class PixelDiTModel(ImaginaireModel):
         # Frozen text encoder. Use object.__setattr__ so DCP / nn.Module don't try to
         # register it as a child / save it in state_dict.
         with misc.timer("PixelDiTModel: load_text_encoder"):
-            _tokenizer, _text_encoder = _load_text_encoder(config.text_encoder_name, device="cuda")
+            _tokenizer, _text_encoder = _load_text_encoder(config.text_encoder_name, device="cpu")
             object.__setattr__(self, "tokenizer", _tokenizer)
             object.__setattr__(self, "text_encoder", _text_encoder)
             self._chi_prompt_str = "\n".join(config.chi_prompt) if config.chi_prompt else ""
@@ -179,13 +179,14 @@ class PixelDiTModel(ImaginaireModel):
             prompts_all = captions
             max_length_all = self.config.model_max_length
 
+        device = next(self.text_encoder.parameters()).device
         caption_token = self.tokenizer(
             prompts_all,
             max_length=max_length_all,
             padding="max_length",
             truncation=True,
             return_tensors="pt",
-        ).to("cuda")
+        ).to(device)
 
         caption_embs = self.text_encoder(caption_token.input_ids, caption_token.attention_mask)[0]
 

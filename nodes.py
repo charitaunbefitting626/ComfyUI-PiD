@@ -30,6 +30,11 @@ if _PID_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 _MODEL_CACHE: dict[tuple[str, str], tuple] = {}
 
+# ---------------------------------------------------------------------------
+# Prompt cache — keyed by (prompt, backbone, ckpt_type) to save text encoding time
+# ---------------------------------------------------------------------------
+_PROMPT_CACHE: dict[tuple[str, str, str], torch.Tensor] = {}
+
 
 def _get_available_backbones():
     """Return the list of backbone + ckpt_type combos that have checkpoints present."""
@@ -84,9 +89,71 @@ def _load_pid_model(backbone: str, ckpt_type: str):
     )
     model.eval()
 
+    # Apply channels_last memory layout to the VAE encoder to speed up conv operations on Tensor Cores
+    if hasattr(model, "vae_encoder") and model.vae_encoder is not None:
+        try:
+            model.vae_encoder.to(memory_format=torch.channels_last)
+            logger.info("PiD: Optimized VAE encoder to channels_last layout.")
+        except Exception as e:
+            logger.warning(f"Failed to optimize VAE memory layout: {e}")
+
+    # Offload to CPU initially to save VRAM when not executing
+    model.to("cpu")
+    if hasattr(model, "text_encoder") and model.text_encoder is not None:
+        model.text_encoder.to("cpu")
+    if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
+        model._null_caption_embs = model._null_caption_embs.to("cpu")
+
     _MODEL_CACHE[cache_key] = (model, config)
-    logger.info(f"PiD model loaded successfully: {backbone}/{ckpt_type}")
+    logger.info(f"PiD model loaded successfully (cached on CPU): {backbone}/{ckpt_type}")
     return model, config
+
+
+# ---------------------------------------------------------------------------
+# Helper classes for ComfyUI sampler/scheduler integration
+# ---------------------------------------------------------------------------
+class MockModelSampling:
+    def __init__(self):
+        self.sigma_min = 0.0
+        self.sigma_max = 1.0
+        self.sigmas = torch.linspace(1.0, 0.0, 1000)
+
+    def timestep(self, sigma):
+        return sigma * 999.0
+
+    def sigma(self, timestep):
+        return timestep / 999.0
+
+    def noise_scaling(self, sigma, noise, latent_image, max_denoise=False):
+        return noise
+
+    def inverse_noise_scaling(self, sigma, samples):
+        return samples
+
+
+class MockInnerInnerModel:
+    def scale_latent_inpaint(self, *args, **kwargs):
+        return 0.0
+
+
+class MockInnerModel:
+    def __init__(self):
+        self.model_sampling = MockModelSampling()
+        self.inner_model = MockInnerInnerModel()
+
+
+class MockModelWrap:
+    def __init__(self, denoise_fn):
+        self.inner_model = MockInnerModel()
+        self.denoise_fn = denoise_fn
+
+    def __call__(self, x, sigma, model_options={}, seed=None):
+        return self.denoise_fn(x, sigma)
+
+    def get_model_object(self, name):
+        if name == "model_sampling":
+            return self.inner_model.model_sampling
+        return None
 
 
 class PiDDecode:
@@ -112,6 +179,14 @@ class PiDDecode:
 
     @classmethod
     def INPUT_TYPES(cls):
+        try:
+            import comfy.samplers
+            samplers = ["default"] + sorted(list(comfy.samplers.KSampler.SAMPLERS))
+            schedulers = ["default"] + sorted(list(comfy.samplers.KSampler.SCHEDULERS))
+        except Exception:
+            samplers = ["default", "ode_euler", "ode_heun", "sde_ancestral"]
+            schedulers = ["default", "linear", "karras", "exponential", "cosine"]
+
         return {
             "required": {
                 "latent": ("LATENT",),
@@ -150,14 +225,6 @@ class PiDDecode:
                     "step": 0.1,
                     "tooltip": "Classifier-free guidance scale for PiD.",
                 }),
-                "seed": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 0xFFFFFFFF,
-                    "tooltip": "Random seed for the PiD diffusion process.",
-                }),
-            },
-            "optional": {
                 "degrade_sigma": ("FLOAT", {
                     "default": 0.0,
                     "min": 0.0,
@@ -165,6 +232,43 @@ class PiDDecode:
                     "step": 0.01,
                     "tooltip": "Noise level indicator. 0.0 = clean latent (standard KSampler output). "
                                "Higher values indicate the latent has more noise (e.g. from early termination).",
+                }),
+                "vram_mode": (["low", "high", "cpu"], {
+                    "default": "low",
+                    "tooltip": "low: Offload text encoder during sampling to save VRAM. high: Keep all models in VRAM for speed. cpu: Run on CPU.",
+                }),
+                "shift": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 20.0,
+                    "step": 0.1,
+                    "tooltip": "Noise schedule shift. 0.0 uses config/model defaults. Larger shifts delay noise removal (smoother/detailed); smaller shifts accelerate it (sharper).",
+                }),
+                "sampler": (samplers, {
+                    "default": "default",
+                    "tooltip": "Sampler algorithm to use for the diffusion decoding loop. 'default' uses the model config's standard sampler.",
+                }),
+                "scheduler": (schedulers, {
+                    "default": "default",
+                    "tooltip": "Noise schedule type. 'default' uses the model's pre-configured steps. Others generate dynamic step distributions.",
+                }),
+                "precision": (["model_default", "fp16", "bf16", "fp32"], {
+                    "default": "model_default",
+                    "tooltip": "Computation precision. 'model_default' uses the checkpoint's native precision (usually bf16). fp16 is faster on older GPUs.",
+                }),
+                "compile_mode": (["none", "reduce-overhead", "max-autotune"], {
+                    "default": "none",
+                    "tooltip": "Compile the PixDiT model using torch.compile. 'reduce-overhead' speeds up inference but has a 1-2 minute warmup on the first run.",
+                }),
+                "prompt_cache": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Cache prompt embeddings in system RAM. Subsequent runs with the same prompt will bypass the text encoder entirely, saving time and VRAM.",
+                }),
+                "seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xFFFFFFFF,
+                    "tooltip": "Random seed for the PiD diffusion process.",
                 }),
             },
         }
@@ -190,16 +294,51 @@ class PiDDecode:
         cfg_scale: float,
         seed: int,
         degrade_sigma: float = 0.0,
+        vram_mode: str = "low",
+        shift: float = 0.0,
+        sampler: str = "default",
+        scheduler: str = "default",
+        precision: str = "model_default",
+        compile_mode: str = "none",
+        prompt_cache: bool = True,
     ):
         # ---- Load model (cached) ----
         model, config = _load_pid_model(backbone, ckpt_type)
 
-        # Move model, text encoder, and any unregistered tensors to CUDA (GPU)
-        model.to("cuda")
-        if hasattr(model, "text_encoder") and model.text_encoder is not None:
-            model.text_encoder.to("cuda")
-        if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
-            model._null_caption_embs = model._null_caption_embs.to("cuda")
+        # ---- Apply Precision Casting ----
+        orig_autocast = model.autocast_dtype
+        if precision == "fp16":
+            model.to(dtype=torch.float16)
+            model.autocast_dtype = torch.float16
+        elif precision == "bf16":
+            model.to(dtype=torch.bfloat16)
+            model.autocast_dtype = torch.bfloat16
+        elif precision == "fp32":
+            model.to(dtype=torch.float32)
+            model.autocast_dtype = None
+
+        # ---- Compile PixDiT Network ----
+        if compile_mode != "none" and not hasattr(model.net, "_orig_mod"):
+            logger.info(f"PiD: Compiling PixDiT network with mode='{compile_mode}'...")
+            try:
+                model.net = torch.compile(model.net, mode=compile_mode)
+                logger.info("PiD: Network compiled successfully!")
+            except Exception as e:
+                logger.warning(f"Failed to compile network: {e}")
+
+        import comfy.model_management
+        import comfy.utils
+
+        # Determine target device
+        if vram_mode == "cpu":
+            device = torch.device("cpu")
+        else:
+            device = comfy.model_management.get_torch_device()
+
+        # Unload ComfyUI's internal models from GPU if running on GPU
+        if device.type == "cuda":
+            logger.info("PiD: Unloading ComfyUI models from GPU to free memory...")
+            comfy.model_management.unload_all_models()
 
         # ---- Extract latent tensor from ComfyUI format ----
         # ComfyUI latents: {"samples": tensor} where tensor is [B, C, H, W]
@@ -208,7 +347,9 @@ class PiDDecode:
 
         logger.info(
             f"PiD decode: latent shape={latent_tensor.shape}, backbone={backbone}, "
-            f"ckpt_type={ckpt_type}, scale={scale}, steps={pid_inference_steps}"
+            f"ckpt_type={ckpt_type}, scale={scale}, steps={pid_inference_steps}, "
+            f"degrade_sigma={degrade_sigma}, vram_mode={vram_mode}, shift={shift}, "
+            f"precision={precision}, compile={compile_mode}, cache={prompt_cache}"
         )
 
         # ---- Determine VAE spatial compression factor dynamically ----
@@ -238,44 +379,168 @@ class PiDDecode:
             f"→ PiD output {target_h}×{target_w}"
         )
 
-        # ---- Build data batch for PiD ----
-        # PiD expects:
-        #   - input_caption_key (default "caption"): list of prompt strings
-        #   - LQ_latent: the VAE latent [B, C, zH, zW] in normalized space
-        #   - LQ_video_or_image: zeros placeholder (model uses latent-only conditioning)
-        #   - degrade_sigma: noise level [B] tensor
+        # ---- Text Encoding Phase ----
         caption_key = model.config.input_caption_key
         captions = [prompt] * B
 
+        # Check Prompt Cache
+        prompt_cache_key = (prompt, backbone, ckpt_type)
+        caption_embs = None
+        if prompt_cache and prompt_cache_key in _PROMPT_CACHE:
+            logger.info("PiD: Prompt embedding cache hit! Bypassing text encoder loading/execution.")
+            caption_embs = _PROMPT_CACHE[prompt_cache_key].to(device)
+        else:
+            if vram_mode == "low" and device.type == "cuda":
+                logger.info("PiD [Low VRAM]: Loading text encoder to GPU...")
+                model.text_encoder.to(device)
+                if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
+                    model._null_caption_embs = model._null_caption_embs.to(device)
+                
+                with torch.no_grad():
+                    caption_embs, _ = model._encode_text_raw(captions)
+                
+                logger.info("PiD [Low VRAM]: Offloading text encoder to CPU...")
+                model.text_encoder.to("cpu")
+                if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
+                    model._null_caption_embs = model._null_caption_embs.to("cpu")
+                comfy.model_management.soft_empty_cache()
+            else:
+                # For high or cpu, move the entire model framework + text encoder to target device
+                model.to(device)
+                if hasattr(model, "text_encoder") and model.text_encoder is not None:
+                    model.text_encoder.to(device)
+                if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
+                    model._null_caption_embs = model._null_caption_embs.to(device)
+                
+                with torch.no_grad():
+                    caption_embs, _ = model._encode_text_raw(captions)
+            
+            if prompt_cache:
+                _PROMPT_CACHE[prompt_cache_key] = caption_embs.cpu()
+
+        # Load sampler framework to GPU (if in low VRAM mode and running on CUDA)
+        if vram_mode == "low" and device.type == "cuda":
+            logger.info("PiD [Low VRAM]: Loading sampler framework to GPU...")
+            model.to(device)
+        else:
+            model.to(device)
+
+        # ---- Diffusion Sampling Phase ----
         data_batch = {
             caption_key: captions,
-            "LQ_latent": latent_tensor.to(dtype=torch.bfloat16, device="cuda"),
+            "caption_embs": caption_embs,
+            "LQ_latent": latent_tensor.to(dtype=model.autocast_dtype if model.autocast_dtype else torch.float32, device=device),
             "LQ_video_or_image": torch.zeros(
                 B, 3, zH * vae_compression, zW * vae_compression,
-                dtype=torch.bfloat16, device="cuda",
-            ),
+                dtype=model.autocast_dtype if model.autocast_dtype else torch.float32, device=device,
+            ).to(memory_format=torch.channels_last),
             "degrade_sigma": torch.tensor(
-                [float(degrade_sigma)] * B, device="cuda", dtype=torch.float32,
+                [float(degrade_sigma)] * B, device=device, dtype=torch.float32,
             ),
         }
 
-        # ---- Run PiD decode ----
-        import comfy.utils
-        pbar = comfy.utils.ProgressBar(pid_inference_steps)
+        # Resolve shift (0.0 means config / model defaults)
+        shift_val = float(shift) if float(shift) > 0.0 else None
 
-        def progress_callback(step, total_steps):
-            pbar.update_absolute(step + 1, total_steps, None)
+        native_samplers = ["default", "ode_euler", "ode_heun", "sde_ancestral"]
+        native_schedulers = ["default", "linear", "karras", "exponential", "cosine"]
 
-        with torch.no_grad():
-            samples = model.generate_samples_from_batch(
-                data_batch,
-                cfg_scale=cfg_scale,
-                num_steps=pid_inference_steps,
-                seed=seed,
-                shift=None,
-                image_size=image_size,
-                callback=progress_callback,
-            )
+        is_native = (sampler in native_samplers) and (scheduler in native_schedulers)
+
+        if is_native:
+            pbar = comfy.utils.ProgressBar(pid_inference_steps)
+            def progress_callback(step, total_steps):
+                pbar.update_absolute(step + 1, total_steps, None)
+
+            with torch.no_grad():
+                samples = model.generate_samples_from_batch(
+                    data_batch,
+                    cfg_scale=cfg_scale,
+                    num_steps=pid_inference_steps,
+                    seed=seed,
+                    shift=shift_val,
+                    image_size=image_size,
+                    callback=progress_callback,
+                    sampler=sampler,
+                    scheduler=scheduler,
+                )
+        else:
+            import comfy.samplers
+            from contextlib import nullcontext
+
+            # Resolve default strings
+            active_sampler = "euler" if sampler == "default" else sampler
+            active_scheduler = "normal" if scheduler == "default" else scheduler
+
+            # 1. Compute sigmas using ComfyUI's scheduler registry
+            mock_sampling = MockModelSampling()
+            sigmas = comfy.samplers.calculate_sigmas(mock_sampling, active_scheduler, pid_inference_steps)
+            sigmas = sigmas.to(device)
+
+            # 2. Apply shift if requested
+            if shift_val is not None and shift_val > 0.0:
+                sigmas = shift_val * sigmas / (1.0 + (shift_val - 1.0) * sigmas)
+                sigmas = torch.clamp(sigmas, min=0.0, max=1.0)
+                sigmas[-1] = 0.0
+
+            # 3. Setup denoise function
+            timescale = model.fm_trainer.timescale
+            net = model.net
+            autocast_ctx = torch.autocast(device.type, dtype=model.autocast_dtype) if (model.autocast_dtype and device.type != "cpu") else nullcontext()
+            degrade_sigma_tensor = data_batch["degrade_sigma"]
+            lq_video_or_image = data_batch["LQ_video_or_image"]
+            lq_latent = data_batch["LQ_latent"]
+
+            def denoise_fn(x_state, sigma_val):
+                t_cur = sigma_val
+                if not isinstance(t_cur, torch.Tensor):
+                    t_cur = torch.tensor([float(t_cur)], device=x_state.device, dtype=x_state.dtype)
+                elif t_cur.ndim == 0:
+                    t_cur = t_cur.unsqueeze(0)
+                
+                B_current = x_state.shape[0]
+                if t_cur.shape[0] != B_current:
+                    t_cur = t_cur.expand(B_current)
+
+                t_cur_scaled = t_cur * timescale
+
+                # Run network forward pass
+                with autocast_ctx:
+                    v_pred = net(
+                        x_state.to(dtype=model.autocast_dtype if model.autocast_dtype else torch.float32),
+                        t_cur_scaled,
+                        caption_embs,
+                        lq_video_or_image=lq_video_or_image,
+                        lq_latent=lq_latent,
+                        degrade_sigma=degrade_sigma_tensor,
+                    )
+                
+                # Convert velocity to x0 pred
+                x0_pred = model._velocity_to_x0(x_state, v_pred, t_cur)
+                return x0_pred.to(x_state.dtype)
+
+            # 4. Prepare noise and generator
+            gen = torch.Generator(device=device).manual_seed(seed)
+            noise = torch.randn(B, 3, target_h, target_w, device=device, generator=gen)
+
+            # 5. Instantiate Mock Model Wrap
+            model_wrap = MockModelWrap(denoise_fn)
+
+            # 6. Instantiate Sampler and Sample
+            sampler_obj = comfy.samplers.sampler_object(active_sampler)
+            
+            pbar = comfy.utils.ProgressBar(pid_inference_steps)
+            def comfy_callback(step, denoised, x_state, total_steps):
+                pbar.update_absolute(step + 1, total_steps, None)
+
+            with torch.no_grad():
+                samples = sampler_obj.sample(
+                    model_wrap,
+                    sigmas,
+                    extra_args={},
+                    callback=comfy_callback,
+                    noise=noise,
+                )
 
         # ---- Convert PiD output to ComfyUI IMAGE format ----
         # PiD output: [B, 3, 1, H, W] in [-1, 1] (5D with T=1)
@@ -297,8 +562,8 @@ class PiDDecode:
         if hasattr(model, "_null_caption_embs") and isinstance(model._null_caption_embs, torch.Tensor):
             model._null_caption_embs = model._null_caption_embs.to("cpu")
 
-        # Clear CUDA memory cache
-        torch.cuda.empty_cache()
+        # Clear CUDA memory cache cleanly
+        comfy.model_management.soft_empty_cache()
 
         return (output,)
 
